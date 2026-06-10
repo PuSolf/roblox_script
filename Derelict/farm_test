@@ -1,0 +1,421 @@
+-- =============================================================================
+-- [🎯 DERELICT MULTI-ESP v7.9 - FIXED HOÀN TOÀN LOGIC & CÚ PHÁP]
+-- =============================================================================
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
+local RunService = game:GetService("RunService")
+local CustomParent = LocalPlayer:WaitForChild("PlayerGui")
+
+-- 🚀 KHỞI TẠO HỆ THỐNG DANH SÁCH ĐEN XÁC CHẾT (ĐỂ ĐÚNG VỊ TRÍ GỐC KHÔNG LỖI)
+if not _G.BlacklistedCorpses then 
+    _G.BlacklistedCorpses = {} 
+end
+
+-- -----------------------------------------------------------------------------
+-- [PHẦN 1: CẤU HÌNH & BIẾN TOÀN CỤC]
+-- -----------------------------------------------------------------------------
+_G.FastBotToggle = false
+_G.LaserToggle = false 
+_G.LockEngineToggle = false 
+_G.AutoFarmHoverToggle = false 
+_G.MaxFastDistance = 120
+_G.CurrentTarget = nil      
+_G.AutoFarmTarget = nil     
+_G.HoverHeight = 4.5        
+_G.MaxFlyStep = 4.5         
+
+local NPC_BLACK_LIST = {
+    ["Gideon"] = true, ["Gustavo"] = true, ["Grave"] = true, ["Wilhelm"] = true,
+    ["CitizenA"] = true, ["CitizenB"] = true, ["CitizenC"] = true, ["CitizenD"] = true,
+}
+
+-- Dọn dẹp các phiên bản cũ tránh xung đột tồn dư
+if CustomParent:FindFirstChild("DerelictProMenuV6") then CustomParent.DerelictProMenuV6:Destroy() end
+if workspace:FindFirstChild("Derelict_Laser_Folder") then workspace.Derelict_Laser_Folder:Destroy() end
+if game:GetService("CoreGui"):FindFirstChild("LockTargetHighlight") then game:GetService("CoreGui").LockTargetHighlight:Destroy() end
+if workspace:FindFirstChild("Derelict_Fake_Floor") then workspace.Derelict_Fake_Floor:Destroy() end
+
+-- Tạo bục đứng phẳng CỰC ĐẠI (Rộng 15x15) để bao trọn vòng hoạt ảnh của vũ khí tầm xa
+local FakeFloor = Instance.new("Part")
+FakeFloor.Name = "Derelict_Fake_Floor"
+FakeFloor.Size = Vector3.new(15, 0.5, 15)
+FakeFloor.Transparency = 1 -- Hoàn toàn vô hình
+FakeFloor.Material = Enum.Material.Plastic
+FakeFloor.Anchored = true
+FakeFloor.CanCollide = false 
+FakeFloor.Parent = workspace
+
+local LaserFolder = Instance.new("Folder")
+LaserFolder.Name = "Derelict_Laser_Folder"
+LaserFolder.Parent = workspace
+
+local LockHighlight = Instance.new("Highlight")
+LockHighlight.Name = "LockTargetHighlight"
+LockHighlight.FillColor = Color3.fromRGB(255, 0, 0) 
+LockHighlight.FillTransparency = 0.5
+LockHighlight.OutlineColor = Color3.fromRGB(255, 255, 255) 
+LockHighlight.Parent = game:GetService("CoreGui")
+
+-- -----------------------------------------------------------------------------
+-- [PHẦN 2: THUẬT TOÁN ĐỒ HỌA ESP (GIỮ NGUYÊN CHUẨN)]
+-- -----------------------------------------------------------------------------
+local function isBeforeCamera(targetPosition)
+    local _, onScreen = Camera:WorldToViewportPoint(targetPosition)
+    return onScreen
+end
+
+local function drawOverheadUI(model)
+    if model:FindFirstChild("MobESP_Overhead") then return end
+    local root = model.PrimaryPart or model:FindFirstChild("HumanoidRootPart")
+    if not root then return end
+    
+    local bbgui = Instance.new("BillboardGui")
+    bbgui.Name = "MobESP_Overhead"; bbgui.Size = UDim2.new(0, 160, 0, 28); bbgui.AlwaysOnTop = true
+    bbgui.ExtentsOffset = Vector3.new(0, (model:GetExtentsSize().Y / 2) + 0.8, 0)
+    bbgui.MaxDistance = _G.MaxFastDistance; bbgui.Adornee = root; bbgui.Parent = model
+    
+    local nameLabel = Instance.new("TextLabel")
+    nameLabel.Size = UDim2.new(1, 0, 1, 0); nameLabel.BackgroundTransparency = 1
+    nameLabel.Text = model.Name
+    nameLabel.TextColor3 = Color3.fromRGB(255, 230, 0) 
+    nameLabel.TextSize = 12; nameLabel.Font = Enum.Font.SourceSansBold
+    nameLabel.TextStrokeTransparency = 0.1; nameLabel.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+    nameLabel.Parent = bbgui
+end
+
+local function drawLaserLine(model, myPos)
+    local root = model.PrimaryPart or model:FindFirstChild("HumanoidRootPart")
+    if not root then return end
+    
+    local originPart = LaserFolder:FindFirstChild("Origin_" .. model:GetDebugId())
+    if not originPart then
+        originPart = Instance.new("Part")
+        originPart.Name = "Origin_" .. model:GetDebugId()
+        originPart.Size = Vector3.new(0.1, 0.1, 0.1)
+        originPart.Transparency = 1; originPart.CanCollide = false; originPart.Anchored = true
+        local att0 = Instance.new("Attachment")
+        att0.Name = "OriginAttachment"; att0.Parent = originPart
+        originPart.Parent = LaserFolder
+    end
+    originPart.Position = myPos - Vector3.new(0, 0.5, 0)
+    
+    local targetAttachment = root:FindFirstChild("LaserTargetAttachment")
+    if not targetAttachment then
+        targetAttachment = Instance.new("Attachment"); targetAttachment.Name = "LaserTargetAttachment"
+        targetAttachment.Position = Vector3.new(0, model:GetExtentsSize().Y * 0.15, 0)
+        targetAttachment.Parent = root
+    end
+    
+    local beam = model:FindFirstChild("FastLaserBeam")
+    if not beam then
+        beam = Instance.new("Beam"); beam.Name = "FastLaserBeam"; beam.Color = ColorSequence.new(Color3.fromRGB(255, 0, 0)) 
+        beam.Width0 = 0.04; beam.Width1 = 0.04; beam.FaceCamera = true
+        beam.Attachment0 = originPart.OriginAttachment; beam.Attachment1 = targetAttachment; beam.Parent = model
+    end
+end
+
+local function clearVisuals(model)
+    if not model then return end
+    if model:FindFirstChild("MobESP_Overhead") then model.MobESP_Overhead:Destroy() end
+    if model:FindFirstChild("FastLaserBeam") then model.FastLaserBeam:Destroy() end
+    local root = model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart
+    if root and root:FindFirstChild("LaserTargetAttachment") then root.LaserTargetAttachment:Destroy() end
+    local originPart = LaserFolder:FindFirstChild("Origin_" .. model:GetDebugId())
+    if originPart then originPart:Destroy() end
+end
+
+-- -----------------------------------------------------------------------------
+-- [PHẦN 3: ENGINE QUÉT QUÁI 360 ĐỘ ĐỘC LẬP]
+-- -----------------------------------------------------------------------------
+local function validateTarget(model, myPos)
+    if not model or not model.Parent then return false end
+    local root = model.PrimaryPart or model:FindFirstChild("HumanoidRootPart")
+    local humanoid = model:FindFirstChildOfClass("Humanoid")
+    if not root or not humanoid or humanoid.Health <= 0 then return false end
+    local distance = (myPos - root.Position).Magnitude
+    if distance > _G.MaxFastDistance or not isBeforeCamera(root.Position) then return false end
+    return true
+end
+
+local function scanNewTarget(myPos, character, TargetFolder)
+    local closestMonster = nil; local shortestDistance = _G.MaxFastDistance
+    for _, obj in pairs(TargetFolder:GetChildren()) do
+        if obj:IsA("Model") and not NPC_BLACK_LIST[obj.Name] and obj ~= character and not Players:GetPlayerFromCharacter(obj) then
+            local monsterRoot = obj.PrimaryPart or obj:FindFirstChild("HumanoidRootPart")
+            local humanoid = obj:FindFirstChildOfClass("Humanoid")
+            if monsterRoot and humanoid and humanoid.Health > 0 and not _G.BlacklistedCorpses[obj] then
+                local distance = (myPos - monsterRoot.Position).Magnitude
+                if distance < shortestDistance and isBeforeCamera(monsterRoot.Position) then
+                    shortestDistance = distance; closestMonster = obj
+                end
+            end
+        end
+    end
+    return closestMonster
+end
+
+local function updateLockEngine(myPos, character, TargetFolder)
+    if not _G.LockEngineToggle then _G.CurrentTarget = nil; LockHighlight.Adornee = nil; return end
+    if _G.CurrentTarget and validateTarget(_G.CurrentTarget, myPos) then LockHighlight.Adornee = _G.CurrentTarget; return end
+    _G.CurrentTarget = nil; LockHighlight.Adornee = nil
+    local newTarget = scanNewTarget(myPos, character, TargetFolder)
+    if newTarget then _G.CurrentTarget = newTarget; LockHighlight.Adornee = newTarget end
+end
+
+local function getClosestMonster360(myPos, character, TargetFolder)
+    local closestMonster = nil; local shortestDistance = math.huge
+    for _, obj in pairs(TargetFolder:GetChildren()) do
+        if obj:IsA("Model") and not NPC_BLACK_LIST[obj.Name] and obj ~= character and not Players:GetPlayerFromCharacter(obj) then
+            local monsterRoot = obj:FindFirstChild("HumanoidRootPart")
+            local humanoid = obj:FindFirstChildOfClass("Humanoid")
+            if monsterRoot and humanoid and humanoid.Health > 0 and not _G.BlacklistedCorpses[obj] then
+                local distance = (myPos - monsterRoot.Position).Magnitude
+                if distance < shortestDistance and distance <= _G.MaxFastDistance then
+                    shortestDistance = distance; closestMonster = obj
+                end
+            end
+        end
+    end
+    return closestMonster
+end
+
+-- -----------------------------------------------------------------------------
+-- [PHẦN 4: GIAO DIỆN MENU v7.6]
+-- -----------------------------------------------------------------------------
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "DerelictProMenuV6"; ScreenGui.Parent = CustomParent; ScreenGui.ResetOnSpawn = false
+
+local MainFrame = Instance.new("Frame")
+MainFrame.Parent = ScreenGui; MainFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
+MainFrame.Position = UDim2.new(0.15, 0, 0.25, 0); MainFrame.Size = UDim2.new(0, 220, 0, 285)
+MainFrame.Active = true; MainFrame.Draggable = true
+local UICorner = Instance.new("UICorner"); UICorner.CornerRadius = UDim.new(0, 8); UICorner.Parent = MainFrame
+
+local Title = Instance.new("TextLabel")
+Title.Parent = MainFrame; Title.Size = UDim2.new(1, 0, 0, 30); Title.BackgroundColor3 = Color3.fromRGB(45, 45, 50)
+Title.Text = "   🎯 DERELICT SYSTEM v7.6"; Title.TextColor3 = Color3.fromRGB(255, 255, 255); Title.TextSize = 11
+local TitleCorner = Instance.new("UICorner"); TitleCorner.CornerRadius = UDim.new(0, 8); TitleCorner.Parent = Title
+
+local ToggleBtn = Instance.new("TextButton")
+ToggleBtn.Parent = MainFrame; ToggleBtn.Position = UDim2.new(0, 10, 0, 40); ToggleBtn.Size = UDim2.new(1, -20, 0, 30)
+ToggleBtn.BackgroundColor3 = Color3.fromRGB(180, 50, 50); ToggleBtn.Text = "KÍCH HOẠT ESP: ĐANG TẮT"; ToggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255); ToggleBtn.TextSize = 11
+local BtnCorner1 = Instance.new("UICorner"); BtnCorner1.CornerRadius = UDim.new(0, 6); BtnCorner1.Parent = ToggleBtn
+
+local LaserBtn = Instance.new("TextButton")
+LaserBtn.Parent = MainFrame; LaserBtn.Position = UDim2.new(0, 10, 0, 75); LaserBtn.Size = UDim2.new(1, -20, 0, 30)
+LaserBtn.BackgroundColor3 = Color3.fromRGB(180, 50, 50); LaserBtn.Text = "ĐƯỜNG KẺ ĐỎ: ĐANG TẮT"; LaserBtn.TextColor3 = Color3.fromRGB(255, 255, 255); LaserBtn.TextSize = 11
+local BtnCorner2 = Instance.new("UICorner"); BtnCorner2.CornerRadius = UDim.new(0, 6); BtnCorner2.Parent = LaserBtn
+
+local LockBtn = Instance.new("TextButton")
+LockBtn.Parent = MainFrame; LockBtn.Position = UDim2.new(0, 10, 0, 110); LockBtn.Size = UDim2.new(1, -20, 0, 30)
+LockBtn.BackgroundColor3 = Color3.fromRGB(180, 50, 50); LockBtn.Text = "ĐỘNG CƠ GHIM: ĐANG TẮT"; LockBtn.TextColor3 = Color3.fromRGB(255, 255, 255); LockBtn.TextSize = 11
+local BtnCorner3 = Instance.new("UICorner"); BtnCorner3.CornerRadius = UDim.new(0, 6); BtnCorner3.Parent = LockBtn
+
+local FarmBtn = Instance.new("TextButton")
+FarmBtn.Parent = MainFrame; FarmBtn.Position = UDim2.new(0, 10, 0, 145); FarmBtn.Size = UDim2.new(1, -20, 0, 30)
+FarmBtn.BackgroundColor3 = Color3.fromRGB(180, 50, 50); FarmBtn.Text = "AUTOFARM ĐỘC LẬP: ĐANG TẮT"; FarmBtn.TextColor3 = Color3.fromRGB(255, 255, 255); FarmBtn.TextSize = 11
+local BtnCorner4 = Instance.new("UICorner"); BtnCorner4.CornerRadius = UDim.new(0, 6); BtnCorner4.Parent = FarmBtn
+
+local HeightLabel = Instance.new("TextLabel", MainFrame)
+HeightLabel.Position = UDim2.new(0, 10, 0, 190); HeightLabel.Size = UDim2.new(0, 120, 0, 30)
+HeightLabel.BackgroundTransparency = 1; HeightLabel.Text = "Độ cao chém: " .. tostring(_G.HoverHeight) .. "s"; HeightLabel.TextColor3 = Color3.fromRGB(0, 255, 255); HeightLabel.TextSize = 11
+
+local btnPlus = Instance.new("TextButton", MainFrame)
+btnPlus.Position = UDim2.new(0, 135, 0, 192); btnPlus.Size = UDim2.new(0, 30, 0, 25); btnPlus.BackgroundColor3 = Color3.fromRGB(55, 55, 60)
+btnPlus.Text = "+"; btnPlus.TextColor3 = Color3.fromRGB(255, 255, 255); btnPlus.TextSize = 14
+btnPlus.MouseButton1Click:Connect(function() _G.HoverHeight = _G.HoverHeight + 0.5; HeightLabel.Text = "Độ cao chém: " .. tostring(_G.HoverHeight) .. "s" end)
+
+local btnMinus = Instance.new("TextButton", MainFrame)
+btnMinus.Position = UDim2.new(0, 175, 0, 192); btnMinus.Size = UDim2.new(0, 30, 0, 25); btnMinus.BackgroundColor3 = Color3.fromRGB(55, 55, 60)
+btnMinus.Text = "-"; btnMinus.TextColor3 = Color3.fromRGB(255, 255, 255); btnMinus.TextSize = 14
+btnMinus.MouseButton1Click:Connect(function() if _G.HoverHeight > 1.5 then _G.HoverHeight = _G.HoverHeight - 0.5; HeightLabel.Text = "Độ cao chém: " .. tostring(_G.HoverHeight) .. "s" end end)
+
+local RangeLabel = Instance.new("TextLabel")
+RangeLabel.Parent = MainFrame; RangeLabel.Position = UDim2.new(0, 10, 0, 235); RangeLabel.Size = UDim2.new(0, 110, 0, 30)
+RangeLabel.BackgroundTransparency = 1; RangeLabel.Text = "Tầm quét (Studs):"; RangeLabel.TextColor3 = Color3.fromRGB(200, 200, 200); RangeLabel.TextSize = 12
+
+local RangeInput = Instance.new("TextBox")
+RangeInput.Parent = MainFrame; RangeInput.Position = UDim2.new(0, 130, 0, 235) ; RangeInput.Size = UDim2.new(0, 80, 0, 30)
+RangeInput.BackgroundColor3 = Color3.fromRGB(15, 15, 20); RangeInput.Text = "120"; RangeInput.TextColor3 = Color3.fromRGB(255, 50, 50)
+local InputCorner = Instance.new("UICorner"); InputCorner.CornerRadius = UDim.new(0, 4); InputCorner.Parent = RangeInput
+
+ToggleBtn.MouseButton1Click:Connect(function()
+    _G.FastBotToggle = not _G.FastBotToggle
+    ToggleBtn.BackgroundColor3 = _G.FastBotToggle and Color3.fromRGB(50, 150, 50) or Color3.fromRGB(180, 50, 50)
+    ToggleBtn.Text = _G.FastBotToggle and "KÍCH HOẠT ESP: ĐANG BẬT" or "KÍCH HOẠT ESP: ĐANG TẮT"
+end)
+
+LaserBtn.MouseButton1Click:Connect(function()
+    _G.LaserToggle = not _G.LaserToggle
+    LaserBtn.BackgroundColor3 = _G.LaserToggle and Color3.fromRGB(50, 150, 50) or Color3.fromRGB(180, 50, 50)
+    LaserBtn.Text = _G.LaserToggle and "ĐƯỜNG KẺ ĐỎ: ĐANG BẬT" or "ĐƯỜNG KẺ ĐỎ: ĐANG TẮT"
+end)
+
+LockBtn.MouseButton1Click:Connect(function()
+    _G.LockEngineToggle = not _G.LockEngineToggle
+    LockBtn.BackgroundColor3 = _G.LockEngineToggle and Color3.fromRGB(50, 150, 50) or Color3.fromRGB(180, 50, 50)
+    LockBtn.Text = _G.LockEngineToggle and "ĐỘNG CƠ GHIM: ĐANG BẬT" or "ĐỘNG CƠ GHIM: ĐANG TẮT"
+end)
+
+FarmBtn.MouseButton1Click:Connect(function()
+    _G.AutoFarmHoverToggle = not _G.AutoFarmHoverToggle
+    FarmBtn.BackgroundColor3 = _G.AutoFarmHoverToggle and Color3.fromRGB(50, 150, 50) or Color3.fromRGB(180, 50, 50)
+    FarmBtn.Text = _G.AutoFarmHoverToggle and "AUTOFARM ĐỘC LẬP: ĐANG BẬT" or "AUTOFARM ĐỘC LẬP: ĐANG TẮT"
+end)
+
+RangeInput.FocusLost:Connect(function()
+    local val = tonumber(RangeInput.Text)
+    if val then _G.MaxFastDistance = val else RangeInput.Text = tostring(_G.MaxFastDistance) end
+end)
+
+-- -----------------------------------------------------------------------------
+-- [PHẦN 5: LUỒNG ĐỒNG BỘ CHÍNH NÂNG CẤP v7.6]
+-- -----------------------------------------------------------------------------
+RunService.RenderStepped:Connect(function()
+    local TargetFolder = workspace:FindFirstChild("InstancedGeometry") and workspace.InstancedGeometry:FindFirstChild("Humanoids")
+    local character = LocalPlayer.Character
+    local myRoot = character and character:FindFirstChild("HumanoidRootPart")
+    local myHumanoid = character and character:FindFirstChildOfClass("Humanoid")
+    
+    if TargetFolder and myRoot and myHumanoid then
+        local myPos = myRoot.Position
+        
+        updateLockEngine(myPos, character, TargetFolder)
+        
+        -- =============================================================================
+        -- [🎯 BẢN HOÀN THIỆN v7.9] LUỒNG 2: KHÓA BẬT GỐC KHI QUÁI <= 0 + FIX LỖI NẰM BẸP DÍ
+        -- =============================================================================
+        if _G.AutoFarmHoverToggle then
+            -- Ép trạng thái chạy liên tục để mở khóa Cung/Trượng
+            myHumanoid:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
+            myHumanoid:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, false)
+            if myHumanoid:GetState() ~= Enum.HumanoidStateType.Running then
+                myHumanoid:ChangeState(Enum.HumanoidStateType.Running)
+            end
+
+            -- Noclip xuyên địa hình
+            for _, part in pairs(character:GetChildren()) do
+                if part:IsA("BasePart") then part.CanCollide = false end
+            end
+            
+            -- Kiểm tra mục tiêu cũ xem có hợp lệ và còn máu hay không
+            local isTargetValid = false
+            if _G.AutoFarmTarget and _G.AutoFarmTarget.Parent and _G.AutoFarmTarget:FindFirstChild("HumanoidRootPart") then
+                local tHumanoid = _G.AutoFarmTarget:FindFirstChildOfClass("Humanoid")
+                -- QUY CHUẨN MỚI: Máu phải lớn hơn 0 và không nằm trong danh sách đen xác chết
+                if tHumanoid and tHumanoid.Health > 0 and not _G.BlacklistedCorpses[_G.AutoFarmTarget] then
+                    isTargetValid = true
+                else
+                    -- Nếu quái hết máu, cho vào danh sách đen ngay để loại bỏ hoàn toàn
+                    _G.BlacklistedCorpses[_G.AutoFarmTarget] = true
+                end
+            end
+
+            -- Nếu quái die, lập tức hủy mục tiêu và quét tìm con khác sống khỏe mạnh
+            if not isTargetValid then
+                _G.AutoFarmTarget = nil
+                -- Quét tìm quái mới sống 100% bằng hàm quét độc lập có loại xác chết
+                _G.AutoFarmTarget = getClosestMonster360(myPos, character, TargetFolder)
+            end
+            
+            FakeFloor.CanCollide = true
+            local nextTargetPosition = nil
+            local lookAtPosition = nil
+            
+            -- Nếu có mục tiêu SỐNG
+            if _G.AutoFarmTarget and _G.AutoFarmTarget:FindFirstChild("HumanoidRootPart") then
+                local tRoot = _G.AutoFarmTarget.HumanoidRootPart
+                local offsetCFrame = tRoot.CFrame * CFrame.new(0, _G.HoverHeight, 2)
+                nextTargetPosition = offsetCFrame.Position
+                lookAtPosition = tRoot.Position
+            end
+            
+            if nextTargetPosition and lookAtPosition then
+                local moveVector = nextTargetPosition - myPos
+                local distance = moveVector.Magnitude
+                
+                if distance < 1.5 then
+                    -- Đã đến điểm an toàn -> Neo cứng người chống giật lắc khi quái di chuyển loăng quăng
+                    myRoot.Velocity = Vector3.new(0, 0, 0)
+                    myRoot.CFrame = CFrame.lookAt(myPos, lookAtPosition)
+                    myRoot.Anchored = true 
+                    
+                    FakeFloor.Position = myPos + Vector3.new(0, -3.1, 0)
+                    FakeFloor.Orientation = Vector3.new(0, 0, 0)
+                else
+                    -- Quái ở xa -> Mở neo để lướt tới cực nhanh
+                    myRoot.Anchored = false
+                    local clampedMove = moveVector.Unit * math.min(distance, _G.MaxFlyStep)
+                    local nextStepPos = myPos + clampedMove
+                    
+                    myRoot.CFrame = CFrame.lookAt(nextStepPos, lookAtPosition)
+                    myRoot.Velocity = Vector3.new(0, 0, 0)
+                    
+                    FakeFloor.Position = nextStepPos + Vector3.new(0, -3.1, 0)
+                    FakeFloor.Orientation = Vector3.new(0, 0, 0)
+                end
+            else
+                -- 🚀 KHÓA LƠ LỬNG TUYỆT ĐỐI KHI QUÁI DIE: Đóng băng ngay lập tức tại vị trí hiện tại, kệ cái xác rơi xuống!
+                myRoot.Velocity = Vector3.new(0, 0, 0)
+                myRoot.Anchored = true 
+                
+                FakeFloor.Position = myPos + Vector3.new(0, -3.1, 0)
+                FakeFloor.Orientation = Vector3.new(0, 0, 0)
+            end
+        else
+            -- 🚀 XỬ LÝ ĐÁP ĐẤT AN TOÀN (FIX LỖI NẰM BẸP DÍ 3-5 GIÂY)
+            if myRoot.Anchored then 
+                myRoot.Anchored = false 
+            end
+            
+            if FakeFloor.CanCollide then
+                FakeFloor.CanCollide = false
+                FakeFloor.Position = Vector3.new(0, -1000, 0)
+                
+                -- Ép nhân vật vào trạng thái Đứng dậy ngay lập tức thay vì thả rơi tự do rơi tự do
+                myHumanoid:ChangeState(Enum.HumanoidStateType.GettingUp)
+                
+                -- Chờ 1 khung hình nhỏ rồi mới trả quyền vật lý cho game để không bị sốc Ragdoll
+                task.defer(function()
+                    myHumanoid:SetStateEnabled(Enum.HumanoidStateType.FallingDown, true)
+                    myHumanoid:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, true)
+                    for _, part in pairs(character:GetChildren()) do
+                        if part:IsA("BasePart") then part.CanCollide = true end
+                    end
+                end)
+                
+                _G.AutoFarmTarget = nil
+                _G.BlacklistedCorpses = {} -- Clear bộ nhớ danh sách đen khi tắt farm
+            end
+        end
+        
+        -- LUỒNG 3: ĐỒ HỌA ESP DIỆN RỘNG (GIỮ NGUYÊN)
+        if _G.FastBotToggle then
+            for _, obj in pairs(TargetFolder:GetChildren()) do
+                if obj:IsA("Model") and not NPC_BLACK_LIST[obj.Name] and obj ~= character and not Players:GetPlayerFromCharacter(obj) then
+                    local monsterRoot = obj.PrimaryPart or obj:FindFirstChild("HumanoidRootPart")
+                    local humanoid = obj:FindFirstChildOfClass("Humanoid")
+                    if monsterRoot and humanoid and humanoid.Health > 0 then
+                        local distance = (myPos - monsterRoot.Position).Magnitude
+                        if distance < _G.MaxFastDistance and isBeforeCamera(monsterRoot.Position) then
+                            drawOverheadUI(obj)
+                            if _G.LaserToggle then drawLaserLine(obj, myPos) else
+                                if obj:FindFirstChild("FastLaserBeam") then obj.FastLaserBeam:Destroy() end
+                                local originPart = LaserFolder:FindFirstChild("Origin_" .. obj:GetDebugId())
+                                if originPart then originPart:Destroy() end
+                            end
+                        else clearVisuals(obj) end
+                    else clearVisuals(obj) end
+                end
+            end
+        else
+            for _, mob in pairs(TargetFolder:GetChildren()) do clearVisuals(mob) end
+        end
+    else
+        LockHighlight.Adornee = nil
+        _G.CurrentTarget = nil
+        _G.AutoFarmTarget = nil
+        FakeFloor.CanCollide = false
+    end
+end)
